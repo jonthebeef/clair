@@ -10,6 +10,8 @@ import { createTickLoop } from './engine/tick'
 import { createConversationEngine, type StreamMessage } from './engine/conversation'
 import { createScheduler } from './scheduler/cron'
 import { loadTasks, saveTasks } from './scheduler/persistence'
+import { createCastPoller } from './cast/poller'
+import { wrapChannelMessage } from './channels/protocol'
 
 const VERSION = '0.1.0'
 
@@ -116,15 +118,45 @@ for (const task of durableTasks) {
 }
 scheduler.start(queue)
 
+// --- Cast poller (runs in main process, not MCP) ---
+// Claude Code's channel notification handler is compile-gated behind
+// feature('KAIROS_CHANNELS'), so MCP notifications are ignored.
+// Instead we poll Cast directly and inject messages into the queue.
+
+let castPoller: ReturnType<typeof createCastPoller> | null = null
+if (!flags['no-cast']) {
+  castPoller = createCastPoller({
+    branches: config.cast.branches,
+    intervalMs: config.cast.pollIntervalMs,
+  })
+
+  castPoller.onNewMessages(messages => {
+    for (const msg of messages) {
+      const wrapped = wrapChannelMessage('cast:' + config.cast.privateBranch, msg.content, {
+        author: msg.author,
+        message_id: msg.id,
+        branch: config.cast.privateBranch,
+      })
+      queue.enqueue({
+        type: 'channel',
+        content: wrapped,
+        priority: 'next',
+      })
+      console.log(`\x1b[35mcast:\x1b[0m ${msg.author}: ${msg.content}`)
+    }
+  })
+}
+
 // --- Main loop: drain queue → send to Claude ---
 
 async function mainLoop() {
   await engine.start()
   tickLoop.start()
+  castPoller?.start()
 
   console.log('\x1b[32m✓\x1b[0m Engine started. Waiting for first tick...')
   if (!flags['no-cast']) {
-    console.log(`\x1b[32m✓\x1b[0m Cast channel: monitoring [${config.cast.branches.join(', ')}]`)
+    console.log(`\x1b[32m✓\x1b[0m Cast channel: polling [${config.cast.branches.join(', ')}] every ${config.cast.pollIntervalMs / 1000}s`)
   }
   console.log()
 
@@ -150,6 +182,7 @@ async function mainLoop() {
 process.on('SIGINT', () => {
   console.log('\n\x1b[36mclair:\x1b[0m shutting down...')
   tickLoop.stop()
+  castPoller?.stop()
   scheduler.stop()
   saveTasks(scheduler.getTasks())
   engine.stop()
