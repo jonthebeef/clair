@@ -1,24 +1,69 @@
-import { $ } from 'bun'
+import { readFileSync } from 'fs'
+import { join } from 'path'
+import { homedir } from 'os'
 
 export type CastMessage = {
   id: string
   author: string
+  authorId?: string // Cast user ID (for self-filtering)
   content: string
   timestamp: string
+  threadId?: string // parent message ID if this is a thread reply
 }
 
-/**
- * Parse Cast CLI branch output. Real format (with ANSI stripped):
- *
- *   Jon Grant  Product Leader | Strategist | Builder  just now  mnf4mcah-721o1r30
- *     hello from the other side
- *
- * Message ID is the last token on the author line (matches /^[a-z0-9-]+$/).
- * Content is on indented lines following the author line.
- * The first line is a branch header ("# clair-private") — skip it.
- */
+// --- API-based polling (uses Clair's own token) ---
+
+const CAST_CONFIG_PATH = process.env.CLAIR_CASTRC ?? join(homedir(), '.clair-castrc')
+
+function loadCastConfig(): { apiUrl: string; token: string } {
+  const raw = readFileSync(CAST_CONFIG_PATH, 'utf-8')
+  return JSON.parse(raw)
+}
+
+async function castApiFetch(path: string): Promise<unknown> {
+  const config = loadCastConfig()
+  const res = await fetch(`${config.apiUrl}${path}`, {
+    headers: { Authorization: `Bearer ${config.token}` },
+  })
+  if (!res.ok) throw new Error(`Cast API ${res.status}`)
+  return res.json()
+}
+
+async function markNotificationsRead(): Promise<void> {
+  const config = loadCastConfig()
+  await fetch(`${config.apiUrl}/notifications/read`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${config.token}` },
+  })
+}
+
+type ApiNotification = {
+  id: string
+  type: string
+  message_id: string
+  actor_id: string
+  actor_name: string
+  message_preview: string
+  message_parent_id: string | null
+  branch_id: string | null
+  branch_name: string | null
+  created_at: string
+  read: number
+}
+
+type ApiBranchMessage = {
+  id: string
+  author_id: string
+  display_name: string
+  content: string
+  created_at: string
+  parent_id: string | null
+  branch_id: string | null
+}
+
+// --- CLI-based parsing (kept for branch polling which uses your CLI) ---
+
 export function parseCastOutput(output: string): CastMessage[] {
-  // Strip ANSI escape codes
   const clean = output.replace(/\x1b\[[0-9;]*m/g, '')
   const lines = clean.split('\n')
   const messages: CastMessage[] = []
@@ -26,23 +71,24 @@ export function parseCastOutput(output: string): CastMessage[] {
   let i = 0
   while (i < lines.length) {
     const line = lines[i]
-    // Look for lines with a message ID at the end (like "mnf4mcah-721o1r30")
     const idMatch = line.match(/\s([a-z0-9]+-[a-z0-9]+)\s*$/)
     if (idMatch) {
       const id = idMatch[1]
-      // Author is the first bold/visible name on this line
-      const authorMatch = line.trim().match(/^(.+?)\s{2,}/)
-      const author = authorMatch ? authorMatch[1].trim() : 'unknown'
-      // Timestamp: look for relative time patterns before the ID
-      const tsMatch = line.match(/(\d+\s+\w+\s+ago|just now)\s+[a-z0-9]+-/)
+      const trimmed = line.trim()
+
+      let author = 'unknown'
+      const pipeIdx = trimmed.indexOf(' | ')
+      if (pipeIdx > 0) {
+        author = extractAuthorFromRaw(output, id)
+      }
+
+      const tsMatch = line.match(/(\d+[smh]\s+ago|\d+\s+\w+\s+ago|just now)\s+[a-z0-9]+-/)
       const timestamp = tsMatch ? tsMatch[1] : ''
 
-      // Collect indented content lines that follow
       const contentLines: string[] = []
       i++
       while (i < lines.length) {
         const next = lines[i]
-        // Content lines are indented (start with spaces) and non-empty
         if (next.match(/^\s{2,}\S/)) {
           contentLines.push(next.trim())
           i++
@@ -52,12 +98,7 @@ export function parseCastOutput(output: string): CastMessage[] {
       }
 
       if (contentLines.length > 0) {
-        messages.push({
-          id,
-          author,
-          content: contentLines.join('\n'),
-          timestamp,
-        })
+        messages.push({ id, author, content: contentLines.join('\n'), timestamp })
       }
     } else {
       i++
@@ -65,6 +106,16 @@ export function parseCastOutput(output: string): CastMessage[] {
   }
 
   return messages
+}
+
+function extractAuthorFromRaw(rawOutput: string, messageId: string): string {
+  const lines = rawOutput.split('\n')
+  for (const line of lines) {
+    if (!line.includes(messageId)) continue
+    const boldMatch = line.match(/\x1b\[1m(.+?)\x1b\[0m/)
+    if (boldMatch) return boldMatch[1].trim()
+  }
+  return 'unknown'
 }
 
 export function diffMessages(
@@ -84,26 +135,105 @@ export function createCastPoller(opts: {
   branches: string[]
   intervalMs: number
   castPath?: string
+  selfUsername?: string // filter out messages from this user (prevent feedback loops)
 }): CastPoller {
   const seenIds = new Set<string>()
   let timer: ReturnType<typeof setInterval> | null = null
   let handler: ((messages: CastMessage[]) => void) | null = null
-  const castCmd = opts.castPath ?? 'cast'
 
-  async function poll() {
+  let seeded = false
+
+  async function pollBranch() {
     for (const branch of opts.branches) {
       try {
-        const result = await $`${castCmd} branch ${branch}`.text()
-        const messages = parseCastOutput(result)
+        const data = await castApiFetch(`/branches/${branch}`) as {
+          messages: ApiBranchMessage[]
+        }
+
+        const messages: CastMessage[] = data.messages.map(m => ({
+          id: m.id,
+          author: m.display_name ?? m.author_id,
+          authorId: m.author_id,
+          content: m.content,
+          timestamp: m.created_at,
+        }))
+
+        if (!seeded) {
+          for (const msg of messages) seenIds.add(msg.id)
+          seeded = true
+          return
+        }
+
         const newMsgs = diffMessages(messages, seenIds)
+          .filter(m => !opts.selfUsername || m.authorId !== opts.selfUsername)
         for (const msg of messages) seenIds.add(msg.id)
         if (newMsgs.length > 0 && handler) {
           handler(newMsgs)
         }
       } catch {
-        // Cast CLI failed — skip this poll cycle
+        // API failed — skip this poll cycle
       }
     }
+  }
+
+  let notificationsSeeded = false
+
+  async function pollNotifications() {
+    try {
+      const data = await castApiFetch('/notifications') as {
+        notifications: ApiNotification[]
+        unread_count: number
+      }
+
+      if (data.unread_count === 0) {
+        notificationsSeeded = true
+        return
+      }
+
+      if (!notificationsSeeded) {
+        // First poll: mark existing notifications as seen without emitting
+        for (const notif of data.notifications) {
+          seenIds.add(notif.message_id)
+        }
+        await markNotificationsRead()
+        notificationsSeeded = true
+        return
+      }
+
+      const newMessages: CastMessage[] = []
+
+      for (const notif of data.notifications) {
+        if (notif.read) continue
+        if (notif.actor_id === 'clair') continue
+        if (notif.type === 'reaction') continue
+        if (seenIds.has(notif.message_id)) continue
+
+        seenIds.add(notif.message_id)
+
+        newMessages.push({
+          id: notif.message_id,
+          author: notif.actor_name,
+          content: notif.message_preview,
+          timestamp: notif.created_at,
+          threadId: notif.message_parent_id ?? undefined,
+        })
+      }
+
+      if (data.unread_count > 0) {
+        await markNotificationsRead()
+      }
+
+      if (newMessages.length > 0 && handler) {
+        handler(newMessages)
+      }
+    } catch {
+      // API failed — skip this poll cycle
+    }
+  }
+
+  async function poll() {
+    await pollBranch()
+    await pollNotifications()
   }
 
   return {

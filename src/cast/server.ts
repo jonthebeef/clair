@@ -25,12 +25,31 @@ const server = new Server(
   },
 )
 
+const SLEEP_TOOL = {
+  name: 'Sleep',
+  description: 'Set how long to wait before the next tick wake-up. Use this when you have nothing to do. Accepts durations like "30s", "5m", "10m". Max 30 minutes.',
+  inputSchema: {
+    type: 'object' as const,
+    properties: {
+      duration: { type: 'string', description: 'How long to sleep, e.g. "30s", "5m", "10m"' },
+    },
+    required: ['duration'],
+  },
+}
+
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: CAST_TOOLS,
+  tools: [...CAST_TOOLS, SLEEP_TOOL],
 }))
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params
+
+  // Sleep is handled by the main process via stream interception — just ack it
+  if (name === 'Sleep') {
+    const duration = (args as Record<string, string>)?.duration ?? '5m'
+    return { content: [{ type: 'text', text: `Sleeping for ${duration}` }] }
+  }
+
   try {
     const result = await executeCastTool(name, args as Record<string, string>)
     return { content: [{ type: 'text', text: result }] }

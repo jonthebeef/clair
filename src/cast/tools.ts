@@ -1,6 +1,32 @@
-import { $ } from 'bun'
+import { readFileSync } from 'fs'
+import { join } from 'path'
+import { homedir } from 'os'
 
-const castCmd = process.env.CAST_PATH ?? 'cast'
+const CAST_CONFIG_PATH = process.env.CLAIR_CASTRC ?? join(homedir(), '.clair-castrc')
+
+function loadCastConfig(): { apiUrl: string; token: string } {
+  const raw = readFileSync(CAST_CONFIG_PATH, 'utf-8')
+  return JSON.parse(raw)
+}
+
+async function castApi(
+  method: string,
+  path: string,
+  body?: Record<string, unknown>,
+): Promise<string> {
+  const config = loadCastConfig()
+  const res = await fetch(`${config.apiUrl}${path}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.token}`,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  const data = await res.text()
+  if (!res.ok) throw new Error(`Cast API ${res.status}: ${data}`)
+  return data
+}
 
 export const CAST_TOOLS = [
   {
@@ -69,19 +95,25 @@ export async function executeCastTool(
   args: Record<string, string>,
 ): Promise<string> {
   switch (name) {
-    case 'cast_post': {
-      const branchArgs = args.branch ? ['--branch', args.branch] : []
-      return await $`${castCmd} post ${args.content} ${branchArgs}`.text()
-    }
+    case 'cast_post':
+      return await castApi('POST', '/messages', {
+        content: args.content,
+        branch_id: args.branch || undefined,
+      })
     case 'cast_reply':
-      return await $`${castCmd} reply ${args.message_id} ${args.content}`.text()
+      return await castApi('POST', `/threads/${args.message_id}/reply`, {
+        content: args.content,
+      })
     case 'cast_react':
-      return await $`${castCmd} react ${args.message_id} ${args.emoji}`.text()
+      return await castApi('POST', `/messages/${args.message_id}/react`, {
+        emoji: args.emoji,
+      })
     case 'cast_read':
-      return await $`${castCmd} branch ${args.branch}`.text()
+      return await castApi('GET', `/branches/${args.branch}`)
     case 'cast_search': {
-      const branchArgs = args.branch ? ['--branch', args.branch] : []
-      return await $`${castCmd} search ${args.query} ${branchArgs}`.text()
+      const params = new URLSearchParams({ q: args.query })
+      if (args.branch) params.set('branch', args.branch)
+      return await castApi('GET', `/search?${params}`)
     }
     default:
       throw new Error(`Unknown cast tool: ${name}`)

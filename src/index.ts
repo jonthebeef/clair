@@ -1,17 +1,32 @@
 #!/usr/bin/env bun
 
 import { parseArgs } from 'util'
-import { resolve } from 'path'
-import { writeFileSync } from 'fs'
+import { resolve, join } from 'path'
+import { writeFileSync, readFileSync } from 'fs'
+import { homedir } from 'os'
 import { loadConfig } from './config/settings'
 import { getProactiveSystemPrompt } from './config/prompts'
 import { createMessageQueue } from './engine/queue'
-import { createTickLoop } from './engine/tick'
+import { createTickLoop, parseSleepDuration } from './engine/tick'
 import { createConversationEngine, type StreamMessage } from './engine/conversation'
 import { createScheduler } from './scheduler/cron'
 import { loadTasks, saveTasks } from './scheduler/persistence'
 import { createCastPoller } from './cast/poller'
 import { wrapChannelMessage } from './channels/protocol'
+import { PERMISSION_REPLY_RE } from './channels/permissions'
+import { createPermissionRelay, type PermissionRelay } from './channels/relay'
+import { isTerminalFocused } from './engine/focus'
+import {
+  formatClairText,
+  formatCastMessage,
+  formatToolCall,
+  formatToolResult,
+  formatSleep,
+  formatPermissionRequest,
+  formatBoot,
+  formatStatus,
+  formatShutdown,
+} from './ui/terminal'
 
 const VERSION = '0.1.0'
 
@@ -48,14 +63,57 @@ if (flags.version) {
 
 // --- Boot ---
 
-console.log(`\x1b[36mclair\x1b[0m v${VERSION}`)
+console.log(formatBoot(VERSION))
 console.log()
 
 const config = loadConfig()
 const queue = createMessageQueue()
 const systemPrompt = getProactiveSystemPrompt(config)
 
-// MCP config for Cast channel server
+// --- Cast API client (Clair's own identity) ---
+
+let castConfig: { apiUrl: string; token: string } | null = null
+try {
+  const rcPath = process.env.CLAIR_CASTRC ?? join(homedir(), '.clair-castrc')
+  castConfig = JSON.parse(readFileSync(rcPath, 'utf-8'))
+} catch {
+  // No Cast config — forwarding and permissions disabled
+}
+
+async function castApiPost(content: string, branchId?: string): Promise<void> {
+  if (!castConfig) return
+  await fetch(`${castConfig.apiUrl}/messages`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${castConfig.token}`,
+    },
+    body: JSON.stringify({
+      content,
+      branch_id: branchId ?? config.cast.privateBranch,
+    }),
+  })
+}
+
+async function forwardToCast(text: string) {
+  if (!castConfig || flags['no-cast'] || !config.cast.forwardProactive) return
+  if (text.length < 10) return
+  try {
+    await castApiPost(text)
+  } catch {
+    // Non-critical
+  }
+}
+
+// --- Permission relay ---
+
+let permissionRelay: PermissionRelay | null = null
+if (!flags['no-cast'] && castConfig) {
+  permissionRelay = createPermissionRelay({ post: castApiPost })
+}
+
+// --- MCP config for Cast channel server ---
+
 let mcpConfigPath: string | undefined
 if (!flags['no-cast']) {
   const castMcpConfig = {
@@ -87,23 +145,54 @@ engine.onMessage((msg: StreamMessage) => {
     const content = msg.message?.content
     if (Array.isArray(content)) {
       for (const block of content) {
-        if (
-          typeof block === 'object' &&
-          block !== null &&
-          'type' in block &&
-          (block as { type: string }).type === 'text'
-        ) {
-          const text = (block as { type: string; text: string }).text
+        if (typeof block !== 'object' || block === null || !('type' in block)) continue
+        const typed = block as { type: string; [key: string]: unknown }
+
+        if (typed.type === 'text') {
+          const text = (typed as { type: string; text: string }).text
           if (text.trim()) {
-            console.log(`\x1b[33mclair:\x1b[0m ${text}`)
+            console.log(formatClairText(text))
+            forwardToCast(text.trim())
           }
+        }
+
+        // Intercept Sleep tool calls to adjust tick pacing
+        const toolName = typed.name as string | undefined
+        const isSleep = typed.type === 'tool_use' && (toolName === 'Sleep' || toolName?.endsWith('__Sleep'))
+        if (isSleep) {
+          const input = typed.input as { duration?: string } | undefined
+          const duration = input?.duration ?? '5m'
+          const ms = parseSleepDuration(duration)
+          tickLoop.setSleepDuration(ms)
+          console.log(formatSleep(duration, ms))
+        }
+
+        // Display tool calls (collapsed) — skip Sleep (already displayed) and internal ToolSearch
+        const isInternal = toolName === 'ToolSearch' || toolName?.endsWith('__ToolSearch')
+        if (typed.type === 'tool_use' && !isSleep && !isInternal) {
+          console.log(formatToolCall({
+            name: typed.name as string,
+            input: typed.input as Record<string, unknown>,
+          }))
         }
       }
     }
   }
+
+  // Display tool results
+  if (msg.type === 'result') {
+    const content = msg.message?.content
+    if (typeof content === 'string' && content.trim()) {
+      const isError = (msg as Record<string, unknown>).is_error === true
+      console.log(formatToolResult({
+        output: content,
+        isError,
+      }))
+    }
+  }
 })
 
-// --- Tick loop ---
+// --- Tick loop (with terminal focus) ---
 
 const tickLoop = createTickLoop(queue, {
   initialIntervalMs: config.tickIntervalMs,
@@ -118,31 +207,52 @@ for (const task of durableTasks) {
 }
 scheduler.start(queue)
 
-// --- Cast poller (runs in main process, not MCP) ---
-// Claude Code's channel notification handler is compile-gated behind
-// feature('KAIROS_CHANNELS'), so MCP notifications are ignored.
-// Instead we poll Cast directly and inject messages into the queue.
+// --- Cast poller (runs in main process) ---
 
 let castPoller: ReturnType<typeof createCastPoller> | null = null
 if (!flags['no-cast']) {
   castPoller = createCastPoller({
     branches: config.cast.branches,
     intervalMs: config.cast.pollIntervalMs,
+    selfUsername: config.cast.username,
   })
 
   castPoller.onNewMessages(messages => {
     for (const msg of messages) {
-      const wrapped = wrapChannelMessage('cast:' + config.cast.privateBranch, msg.content, {
+      // Check if this is a permission reply (e.g. "yes tbxkq")
+      const permMatch = msg.content.match(PERMISSION_REPLY_RE)
+      if (permMatch && permissionRelay) {
+        const behavior = permMatch[1].toLowerCase().startsWith('y') ? 'allow' as const : 'deny' as const
+        const code = permMatch[2].toLowerCase()
+        const resolved = permissionRelay.callbacks.resolve(code, behavior, 'cast:' + config.cast.privateBranch)
+        if (resolved) {
+          console.log(formatClairText(`Permission ${behavior === 'allow' ? '✓ granted' : '✗ denied'} (${code})`))
+          continue // Don't forward permission replies to Claude
+        }
+      }
+
+      // On mention-only branches, skip messages that don't @mention Clair
+      const msgBranch = msg.threadId ? '' : config.cast.privateBranch // notifications don't have branch context
+      if (config.cast.mentionOnlyBranches.includes(msgBranch)) {
+        const mentionRe = new RegExp(`@${config.cast.username}\\b`, 'i')
+        if (!mentionRe.test(msg.content)) continue
+      }
+
+      const meta: Record<string, string> = {
         author: msg.author,
         message_id: msg.id,
         branch: config.cast.privateBranch,
-      })
+      }
+      if (msg.threadId) {
+        meta.thread_id = msg.threadId
+      }
+      const wrapped = wrapChannelMessage('cast:' + config.cast.privateBranch, msg.content, meta)
       queue.enqueue({
         type: 'channel',
         content: wrapped,
         priority: 'next',
       })
-      console.log(`\x1b[35mcast:\x1b[0m ${msg.author}: ${msg.content}`)
+      console.log(formatCastMessage(msg.author, msg.content, msg.threadId))
     }
   })
 }
@@ -154,9 +264,12 @@ async function mainLoop() {
   tickLoop.start()
   castPoller?.start()
 
-  console.log('\x1b[32m✓\x1b[0m Engine started. Waiting for first tick...')
+  console.log(formatStatus('Engine started. Waiting for first tick...'))
   if (!flags['no-cast']) {
-    console.log(`\x1b[32m✓\x1b[0m Cast channel: polling [${config.cast.branches.join(', ')}] every ${config.cast.pollIntervalMs / 1000}s`)
+    console.log(formatStatus(`Cast channel: polling [${config.cast.branches.join(', ')}] every ${config.cast.pollIntervalMs / 1000}s`))
+    if (permissionRelay) {
+      console.log(formatStatus('Permission relay: active (reply on Cast to approve/deny)'))
+    }
   }
   console.log()
 
@@ -171,6 +284,18 @@ async function mainLoop() {
     const nonTicks = batch.filter(m => m.type !== 'tick')
     const latest = ticks.length > 0 ? [ticks[ticks.length - 1]] : []
 
+    // Inject terminal focus into tick messages
+    for (const m of latest) {
+      const focused = await isTerminalFocused()
+      // Replace the tick content with an updated version that includes focus
+      if (m.content.includes('<tick')) {
+        m.content = m.content.replace(
+          /<tick([^>]*)>/,
+          `<tick$1 terminalFocus="${focused}">`,
+        )
+      }
+    }
+
     for (const m of [...nonTicks, ...latest]) {
       engine.send(m.content)
     }
@@ -180,7 +305,7 @@ async function mainLoop() {
 // --- Graceful shutdown ---
 
 process.on('SIGINT', () => {
-  console.log('\n\x1b[36mclair:\x1b[0m shutting down...')
+  console.log(formatShutdown())
   tickLoop.stop()
   castPoller?.stop()
   scheduler.stop()

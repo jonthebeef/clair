@@ -10,6 +10,8 @@ export type ClairConfig = {
     pollIntervalMs: number
     privateBranch: string
     forwardProactive: boolean
+    mentionOnlyBranches: string[] // branches where Clair only responds to @clair mentions
+    username: string // Clair's Cast username for @mention detection
   }
   scheduler: {
     maxJobs: number
@@ -22,9 +24,11 @@ const DEFAULTS: ClairConfig = {
   tickIntervalMs: 30_000,
   cast: {
     branches: ['clair-private'],
-    pollIntervalMs: 5_000,
+    pollIntervalMs: 3_000,
     privateBranch: 'clair-private',
     forwardProactive: true,
+    mentionOnlyBranches: [], // e.g. ['main', 'dev'] — only respond when @clair
+    username: 'clair',
   },
   scheduler: {
     maxJobs: 50,
