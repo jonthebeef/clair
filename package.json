@@ -1,0 +1,16 @@
+{
+  "name": "clair",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": { "clair": "./src/index.ts" },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
