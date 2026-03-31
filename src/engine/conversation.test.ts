@@ -9,6 +9,7 @@ describe('buildClaudeArgs', () => {
   test('builds default args for stream-json mode', () => {
     const args = buildClaudeArgs({ systemPrompt: 'You are Clair.' })
     expect(args).toContain('--print')
+    expect(args).toContain('--verbose')
     expect(args).toContain('--input-format')
     expect(args).toContain('stream-json')
     expect(args).toContain('--output-format')

@@ -12,6 +12,7 @@ export type ClaudeOptions = {
 export function buildClaudeArgs(opts: ClaudeOptions): string[] {
   const args = [
     '--print',
+    '--verbose',
     '--input-format', 'stream-json',
     '--output-format', 'stream-json',
     '--system-prompt', opts.systemPrompt,
@@ -69,10 +70,10 @@ export function createConversationEngine(
   return {
     send(content: string) {
       if (!proc?.stdin) throw new Error('Claude process not running')
-      const writer = proc.stdin as WritableStream
-      const w = writer.getWriter()
-      w.write(new TextEncoder().encode(formatUserMessage(content) + '\n'))
-      w.releaseLock()
+      // Bun's spawn stdin is a FileSink, not a WritableStream
+      const stdin = proc.stdin as unknown as { write(data: string | Uint8Array): number; flush(): void }
+      stdin.write(formatUserMessage(content) + '\n')
+      stdin.flush()
     },
 
     onMessage(handler) {
@@ -87,21 +88,27 @@ export function createConversationEngine(
         stderr: 'inherit',
       })
 
-      const reader = proc.stdout.getReader()
+      // Bun's stdout is a ReadableStream<Uint8Array>
+      const stdout = proc.stdout as ReadableStream<Uint8Array>
+      const reader = stdout.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
 
       const readLoop = async () => {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buffer += decoder.decode(value, { stream: true })
-          const lines = buffer.split('\n')
-          buffer = lines.pop() ?? ''
-          for (const line of lines) {
-            const msg = parseStreamMessage(line)
-            if (msg && messageHandler) messageHandler(msg)
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buffer += decoder.decode(value, { stream: true })
+            const lines = buffer.split('\n')
+            buffer = lines.pop() ?? ''
+            for (const line of lines) {
+              const msg = parseStreamMessage(line)
+              if (msg && messageHandler) messageHandler(msg)
+            }
           }
+        } catch {
+          // Process exited
         }
       }
 
