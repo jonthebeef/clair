@@ -25,6 +25,67 @@ export function formatTick(now: Date, ctx?: TickContext): string {
   return `<tick${attrs}>${iso}</tick>`
 }
 
+import type { MessageQueue } from './queue'
+
+export type TickLoop = {
+  start(): void
+  stop(): void
+  setSleepDuration(ms: number): void
+  wake(): void
+}
+
+export function createTickLoop(
+  queue: MessageQueue,
+  opts?: { initialIntervalMs?: number },
+): TickLoop {
+  let intervalMs = opts?.initialIntervalMs ?? DEFAULT_TICK_MS
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let running = false
+
+  function scheduleTick() {
+    if (!running) return
+    timer = setTimeout(() => {
+      const tick = formatTick(new Date(), {
+        pendingMessages: queue.hasMessages() ? undefined : 0,
+      })
+      queue.enqueue({ type: 'tick', content: tick })
+      scheduleTick()
+    }, intervalMs)
+  }
+
+  return {
+    start() {
+      running = true
+      const tick = formatTick(new Date())
+      queue.enqueue({ type: 'tick', content: tick })
+      scheduleTick()
+    },
+
+    stop() {
+      running = false
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+    },
+
+    setSleepDuration(ms: number) {
+      intervalMs = Math.min(ms, MAX_SLEEP_MS)
+      if (timer) {
+        clearTimeout(timer)
+        scheduleTick()
+      }
+    },
+
+    wake() {
+      if (timer) {
+        clearTimeout(timer)
+        scheduleTick()
+      }
+    },
+  }
+}
+
 export function parseSleepDuration(input: string): number {
   const trimmed = input.trim()
   if (!trimmed) return DEFAULT_TICK_MS
