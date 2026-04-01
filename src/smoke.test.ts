@@ -19,7 +19,7 @@ describe('smoke test', () => {
     expect(prompt).toContain('<tick>')
     expect(prompt).toContain('Sleep')
     expect(prompt).toContain('cast_post')
-    expect(prompt).toContain('SendUserMessage')
+    expect(prompt).toContain('switch_model')
   })
 
   test('claude args include stream-json and mcp config', () => {
