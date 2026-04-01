@@ -9,6 +9,7 @@ export type CastMessage = {
   content: string
   timestamp: string
   threadId?: string // parent message ID if this is a thread reply
+  branch?: string // which branch this message came from
 }
 
 // --- API-based polling (uses Clair's own token) ---
@@ -141,7 +142,7 @@ export function createCastPoller(opts: {
   let timer: ReturnType<typeof setInterval> | null = null
   let handler: ((messages: CastMessage[]) => void) | null = null
 
-  let seeded = false
+  const seededBranches = new Set<string>()
 
   async function pollBranch() {
     for (const branch of opts.branches) {
@@ -156,12 +157,13 @@ export function createCastPoller(opts: {
           authorId: m.author_id,
           content: m.content,
           timestamp: m.created_at,
+          branch,
         }))
 
-        if (!seeded) {
+        if (!seededBranches.has(branch)) {
           for (const msg of messages) seenIds.add(msg.id)
-          seeded = true
-          return
+          seededBranches.add(branch)
+          continue
         }
 
         const newMsgs = diffMessages(messages, seenIds)
@@ -210,6 +212,7 @@ export function createCastPoller(opts: {
           content: notif.message_preview,
           timestamp: notif.created_at,
           threadId: notif.message_parent_id ?? undefined,
+          branch: notif.branch_id ?? undefined,
         })
       }
 

@@ -25,6 +25,38 @@ const server = new Server(
   },
 )
 
+const SCHEDULE_TOOLS = [
+  {
+    name: 'schedule_task',
+    description: 'Create a recurring scheduled task. The prompt will be injected into the conversation when the cron fires. Use standard 5-field cron expressions (minute hour day-of-month month day-of-week). Examples: "0 9 * * *" = daily at 9am, "*/5 * * * *" = every 5 minutes, "0 9 * * 1-5" = weekday mornings.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        cron: { type: 'string', description: 'Cron expression, e.g. "0 9 * * *"' },
+        prompt: { type: 'string', description: 'What to do when the task fires' },
+        durable: { type: 'boolean', description: 'Persist across restarts (default true)' },
+      },
+      required: ['cron', 'prompt'],
+    },
+  },
+  {
+    name: 'list_tasks',
+    description: 'List all scheduled tasks with their IDs, cron expressions, and next run times.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'remove_task',
+    description: 'Remove a scheduled task by ID.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        task_id: { type: 'string', description: 'The task ID to remove' },
+      },
+      required: ['task_id'],
+    },
+  },
+]
+
 const SLEEP_TOOL = {
   name: 'Sleep',
   description: 'Set how long to wait before the next tick wake-up. Use this when you have nothing to do. Accepts durations like "30s", "5m", "10m". Max 30 minutes.',
@@ -38,7 +70,7 @@ const SLEEP_TOOL = {
 }
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [...CAST_TOOLS, SLEEP_TOOL],
+  tools: [...CAST_TOOLS, SLEEP_TOOL, ...SCHEDULE_TOOLS],
 }))
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -48,6 +80,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (name === 'Sleep') {
     const duration = (args as Record<string, string>)?.duration ?? '5m'
     return { content: [{ type: 'text', text: `Sleeping for ${duration}` }] }
+  }
+
+  // Schedule tools are handled by the main process via stream interception
+  if (name === 'schedule_task') {
+    const a = args as Record<string, unknown>
+    return { content: [{ type: 'text', text: `Scheduling task: "${a.prompt}" with cron "${a.cron}"` }] }
+  }
+  if (name === 'list_tasks') {
+    // Main process will intercept and inject actual task list via text output
+    return { content: [{ type: 'text', text: 'Listing tasks (see terminal output)' }] }
+  }
+  if (name === 'remove_task') {
+    const a = args as Record<string, string>
+    return { content: [{ type: 'text', text: `Removing task ${a.task_id}` }] }
   }
 
   try {

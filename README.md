@@ -81,6 +81,7 @@ bun run start -- --config ./my.json    # custom config file
 | `-c, --config <path>` | Config file path (default: `~/.clair/config.json`) |
 | `--skip-permissions` | Skip permission checks |
 | `--no-cast` | Disable Cast channel integration |
+| `--new-session` | Start fresh instead of resuming previous session |
 
 ## Configuration
 
@@ -99,6 +100,10 @@ Config lives at `~/.clair/config.json` (created on first run):
   },
   "scheduler": {
     "maxJobs": 50
+  },
+  "triggers": {
+    "enabled": false,
+    "port": 4117
   }
 }
 ```
@@ -113,6 +118,9 @@ Config lives at `~/.clair/config.json` (created on first run):
 | `cast.mentionOnlyBranches` | Branches where Clair only responds to @mentions |
 | `cast.username` | Clair's Cast username for @mention detection |
 | `scheduler.maxJobs` | Max concurrent scheduled tasks |
+| `triggers.enabled` | Enable webhook trigger server |
+| `triggers.port` | Port for trigger server (default: 4117) |
+| `triggers.secret` | Optional shared secret for webhook auth |
 
 ## Architecture
 
@@ -132,8 +140,24 @@ Config lives at `~/.clair/config.json` (created on first run):
 - **Terminal focus detection** — macOS `lsappinfo` checks if your terminal is frontmost. Away = autonomous. Watching = collaborative.
 - **Permission relay** — dangerous actions post a 5-letter approval code to Cast. Reply "yes tbxkq" from your phone.
 - **Status bar** — persistent bottom-of-terminal line showing mode, focus, Cast connection, last activity.
-- **Cron scheduler** — durable tasks that survive restarts. Standard 5-field cron expressions.
+- **Cron scheduler** — durable tasks that survive restarts. Standard 5-field cron expressions. Claude can create tasks via MCP tools.
 - **Cast forwarding** — Clair's text responses auto-post to your private Cast branch.
+- **Session persistence** — conversation survives restarts via Claude Code's `--resume`. Session ID saved to `~/.clair/session.json`.
+- **Cost tracking** — token usage and dollar cost displayed in the status bar. Summary on shutdown.
+- **Remote triggers** — HTTP webhook server accepts POST requests to inject prompts. Wire up GitHub Actions, Cast webhooks, etc.
+- **Multi-branch** — monitor multiple Cast branches. @mention filtering on public branches.
+
+### Remote triggers
+
+Enable in config (`"triggers": { "enabled": true }`), then POST to inject prompts:
+
+```bash
+curl -X POST http://localhost:4117/trigger \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "deploy failed — check logs", "source": "github"}'
+```
+
+With auth: set `triggers.secret` in config, then pass `Authorization: Bearer <secret>` header.
 
 ## Tests
 

@@ -7,6 +7,7 @@ export type ClaudeOptions = {
   allowedTools?: string[]
   mcpConfig?: string
   additionalArgs?: string[]
+  resumeSessionId?: string // resume a previous session
 }
 
 export function buildClaudeArgs(opts: ClaudeOptions): string[] {
@@ -23,6 +24,7 @@ export function buildClaudeArgs(opts: ClaudeOptions): string[] {
     args.push('--allowedTools', opts.allowedTools.join(','))
   }
   if (opts.mcpConfig) args.push('--mcp-config', opts.mcpConfig)
+  if (opts.resumeSessionId) args.push('--resume', opts.resumeSessionId)
   if (opts.additionalArgs) args.push(...opts.additionalArgs)
   return args
 }

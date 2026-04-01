@@ -17,6 +17,7 @@ export type StatusState = {
   focused?: boolean
   castConnected?: boolean
   lastActivity?: string // brief description
+  cost?: number // session cost in USD
 }
 
 export type StatusLine = {
@@ -80,6 +81,11 @@ export function createStatusLine(): StatusLine {
     // Cast
     if (state.castConnected) {
       parts.push(`${CYAN}cast${RESET}`)
+    }
+
+    // Cost
+    if (state.cost !== undefined && state.cost > 0) {
+      parts.push(`${DIM}$${state.cost.toFixed(2)}${RESET}`)
     }
 
     // Last activity

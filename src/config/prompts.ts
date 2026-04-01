@@ -28,7 +28,11 @@ Private branch for direct comms: ${config.cast.privateBranch}
 
 ## Scheduled tasks
 
-Cron tasks arrive as \`<cron>\` tags. Execute the prompt inside them.
+Cron tasks arrive as \`<cron>\` tags. Execute the prompt inside them. You can create, list, and remove scheduled tasks using the schedule_task, list_tasks, and remove_task tools.
+
+## Remote triggers
+
+External events arrive as \`<trigger>\` tags with a source attribute (e.g. "github", "webhook"). Treat them like channel messages — act on the prompt inside.
 
 ## Terminal focus
 

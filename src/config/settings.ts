@@ -16,6 +16,11 @@ export type ClairConfig = {
   scheduler: {
     maxJobs: number
   }
+  triggers: {
+    enabled: boolean
+    port: number
+    secret?: string
+  }
 }
 
 const CONFIG_PATH = join(homedir(), '.clair', 'config.json')
@@ -32,6 +37,10 @@ const DEFAULTS: ClairConfig = {
   },
   scheduler: {
     maxJobs: 50,
+  },
+  triggers: {
+    enabled: false,
+    port: 4117,
   },
 }
 
@@ -50,6 +59,7 @@ export function loadConfig(customPath?: string): ClairConfig {
       ...parsed,
       cast: { ...DEFAULTS.cast, ...parsed.cast },
       scheduler: { ...DEFAULTS.scheduler, ...parsed.scheduler },
+      triggers: { ...DEFAULTS.triggers, ...parsed.triggers },
     }
   } catch {
     return DEFAULTS

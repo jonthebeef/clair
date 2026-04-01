@@ -16,6 +16,8 @@ import { wrapChannelMessage } from './channels/protocol'
 import { PERMISSION_REPLY_RE } from './channels/permissions'
 import { createPermissionRelay, type PermissionRelay } from './channels/relay'
 import { isTerminalFocused } from './engine/focus'
+import { createTriggerServer } from './engine/triggers'
+import { loadSession, saveSession, clearSession } from './engine/session'
 import {
   formatClairText,
   formatCastMessage,
@@ -39,6 +41,7 @@ const { values: flags } = parseArgs({
     config: { type: 'string', short: 'c' },
     'skip-permissions': { type: 'boolean' },
     'no-cast': { type: 'boolean' },
+    'new-session': { type: 'boolean' },
   },
   strict: false,
 })
@@ -55,6 +58,9 @@ Options:
   -c, --config <path>     Config file path (default: ~/.clair/config.json)
   --skip-permissions      Skip permission checks (dangerous)
   --no-cast               Disable Cast channel integration
+  --new-session           Start fresh instead of resuming previous session
+
+Session is auto-saved and resumed on restart. Cost tracked in status bar.
 `)
   process.exit(0)
 }
@@ -135,11 +141,20 @@ if (!flags['no-cast']) {
   writeFileSync(mcpConfigPath, JSON.stringify(castMcpConfig))
 }
 
+// --- Session resume ---
+
+let currentSessionId: string | null = null
+const previousSession = flags['new-session'] ? null : loadSession()
+if (previousSession) {
+  console.log(formatStatus(`Resuming session ${previousSession.sessionId.slice(0, 8)}...`))
+}
+
 const engine = createConversationEngine({
   systemPrompt,
   model: flags.model as string | undefined,
   skipPermissions: flags['skip-permissions'] as boolean | undefined,
   mcpConfig: mcpConfigPath,
+  resumeSessionId: previousSession?.sessionId,
 })
 
 function truncateStatus(s: string): string {
@@ -147,9 +162,38 @@ function truncateStatus(s: string): string {
   return line.length > 40 ? line.slice(0, 37) + '...' : line
 }
 
+// --- Session & cost tracking from stream ---
+
+let sessionCostUsd = 0
+let sessionInputTokens = 0
+let sessionOutputTokens = 0
+
 // --- Handle Claude's responses ---
 
 engine.onMessage((msg: StreamMessage) => {
+  // Capture session ID from any message
+  const sessionId = (msg as Record<string, unknown>).session_id as string | undefined
+  if (sessionId && sessionId !== currentSessionId) {
+    currentSessionId = sessionId
+    saveSession({
+      sessionId,
+      startedAt: previousSession?.startedAt ?? new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
+    })
+  }
+
+  // Capture cost from result messages
+  if (msg.type === 'result') {
+    const cost = (msg as Record<string, unknown>).total_cost_usd as number | undefined
+    const usage = (msg as Record<string, unknown>).usage as Record<string, unknown> | undefined
+    if (cost) sessionCostUsd += cost
+    if (usage) {
+      sessionInputTokens += (usage.input_tokens as number ?? 0) + (usage.cache_read_input_tokens as number ?? 0)
+      sessionOutputTokens += (usage.output_tokens as number ?? 0)
+    }
+    statusLine.update({ cost: sessionCostUsd })
+  }
+
   if (msg.type === 'assistant') {
     const content = msg.message?.content
     if (Array.isArray(content)) {
@@ -178,9 +222,53 @@ engine.onMessage((msg: StreamMessage) => {
           statusLine.update({ mode: 'sleeping', sleepUntil: formatWakeTime(ms) })
         }
 
-        // Display tool calls (collapsed) — skip Sleep (already displayed) and internal ToolSearch
+        // Intercept schedule_task tool calls
+        const isScheduleTask = typed.type === 'tool_use' && (toolName === 'schedule_task' || toolName?.endsWith('__schedule_task'))
+        if (isScheduleTask) {
+          const input = typed.input as { cron?: string; prompt?: string; durable?: boolean } | undefined
+          if (input?.cron && input?.prompt) {
+            try {
+              const task = scheduler.addTask({
+                cron: input.cron,
+                prompt: input.prompt,
+                durable: input.durable ?? true,
+              })
+              if (task.durable) saveTasks(scheduler.getTasks())
+              console.log(formatClairText(`Scheduled task ${task.id}: "${input.prompt}" (${input.cron}), next: ${task.nextRun}`))
+            } catch (e) {
+              console.log(formatClairText(`Failed to schedule: ${(e as Error).message}`))
+            }
+          }
+        }
+
+        // Intercept remove_task tool calls
+        const isRemoveTask = typed.type === 'tool_use' && (toolName === 'remove_task' || toolName?.endsWith('__remove_task'))
+        if (isRemoveTask) {
+          const input = typed.input as { task_id?: string } | undefined
+          if (input?.task_id) {
+            const removed = scheduler.removeTask(input.task_id)
+            saveTasks(scheduler.getTasks())
+            console.log(formatClairText(removed ? `Removed task ${input.task_id}` : `Task ${input.task_id} not found`))
+          }
+        }
+
+        // Intercept list_tasks tool calls
+        const isListTasks = typed.type === 'tool_use' && (toolName === 'list_tasks' || toolName?.endsWith('__list_tasks'))
+        if (isListTasks) {
+          const tasks = scheduler.getTasks()
+          if (tasks.length === 0) {
+            console.log(formatClairText('No scheduled tasks'))
+          } else {
+            for (const t of tasks) {
+              console.log(formatClairText(`  ${t.id}: "${t.prompt}" (${t.cron}) next: ${t.nextRun}`))
+            }
+          }
+        }
+
+        // Display tool calls (collapsed) — skip handled tools and internal ToolSearch
         const isInternal = toolName === 'ToolSearch' || toolName?.endsWith('__ToolSearch')
-        if (typed.type === 'tool_use' && !isSleep && !isInternal) {
+        const isSchedulerTool = isScheduleTask || isRemoveTask || isListTasks
+        if (typed.type === 'tool_use' && !isSleep && !isInternal && !isSchedulerTool) {
           console.log(formatToolCall({
             name: typed.name as string,
             input: typed.input as Record<string, unknown>,
@@ -218,6 +306,17 @@ for (const task of durableTasks) {
 }
 scheduler.start(queue)
 
+// --- Remote triggers (webhook server) ---
+
+let triggerServer: ReturnType<typeof createTriggerServer> | null = null
+if (config.triggers.enabled) {
+  triggerServer = createTriggerServer({
+    queue,
+    port: config.triggers.port,
+    secret: config.triggers.secret,
+  })
+}
+
 // --- Cast poller (runs in main process) ---
 
 let castPoller: ReturnType<typeof createCastPoller> | null = null
@@ -243,7 +342,7 @@ if (!flags['no-cast']) {
       }
 
       // On mention-only branches, skip messages that don't @mention Clair
-      const msgBranch = msg.threadId ? '' : config.cast.privateBranch // notifications don't have branch context
+      const msgBranch = msg.branch ?? config.cast.privateBranch
       if (config.cast.mentionOnlyBranches.includes(msgBranch)) {
         const mentionRe = new RegExp(`@${config.cast.username}\\b`, 'i')
         if (!mentionRe.test(msg.content)) continue
@@ -252,12 +351,12 @@ if (!flags['no-cast']) {
       const meta: Record<string, string> = {
         author: msg.author,
         message_id: msg.id,
-        branch: config.cast.privateBranch,
+        branch: msgBranch,
       }
       if (msg.threadId) {
         meta.thread_id = msg.threadId
       }
-      const wrapped = wrapChannelMessage('cast:' + config.cast.privateBranch, msg.content, meta)
+      const wrapped = wrapChannelMessage('cast:' + msgBranch, msg.content, meta)
       queue.enqueue({
         type: 'channel',
         content: wrapped,
@@ -275,6 +374,7 @@ async function mainLoop() {
   await engine.start()
   tickLoop.start()
   castPoller?.start()
+  triggerServer?.start()
 
   console.log(formatStatus('Engine started. Waiting for first tick...'))
   if (!flags['no-cast']) {
@@ -282,6 +382,9 @@ async function mainLoop() {
     if (permissionRelay) {
       console.log(formatStatus('Permission relay: active (reply on Cast to approve/deny)'))
     }
+  }
+  if (triggerServer) {
+    console.log(formatStatus(`Triggers: listening on port ${triggerServer.port}`))
   }
   console.log()
 
@@ -321,8 +424,20 @@ async function mainLoop() {
 process.on('SIGINT', () => {
   statusLine.clear()
   console.log(formatShutdown())
+  if (currentSessionId) {
+    saveSession({
+      sessionId: currentSessionId,
+      startedAt: previousSession?.startedAt ?? new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
+    })
+    console.log(formatStatus(`Session saved (${currentSessionId.slice(0, 8)}). Use --new-session to start fresh.`))
+  }
+  if (sessionCostUsd > 0) {
+    console.log(formatStatus(`Session cost: $${sessionCostUsd.toFixed(2)} (${sessionInputTokens.toLocaleString()} in / ${sessionOutputTokens.toLocaleString()} out)`))
+  }
   tickLoop.stop()
   castPoller?.stop()
+  triggerServer?.stop()
   scheduler.stop()
   saveTasks(scheduler.getTasks())
   engine.stop()
