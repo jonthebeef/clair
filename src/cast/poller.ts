@@ -188,11 +188,10 @@ export function createCastPoller(opts: {
       }
 
       if (!notificationsSeeded) {
-        // First poll: mark existing notifications as seen without emitting
+        // First poll: seed existing notification message IDs without emitting
         for (const notif of data.notifications) {
           seenIds.add(notif.message_id)
         }
-        if (data.unread_count > 0) await markNotificationsRead()
         notificationsSeeded = true
         return
       }
@@ -200,7 +199,7 @@ export function createCastPoller(opts: {
       const newMessages: CastMessage[] = []
 
       for (const notif of data.notifications) {
-        if (notif.actor_id === 'clair') continue
+        if (notif.actor_id === opts.selfUsername) continue
         if (notif.type === 'reaction') continue
         if (seenIds.has(notif.message_id)) continue
 
@@ -214,10 +213,6 @@ export function createCastPoller(opts: {
           threadId: notif.message_parent_id ?? undefined,
           branch: notif.branch_id ?? undefined,
         })
-      }
-
-      if (data.unread_count > 0) {
-        await markNotificationsRead()
       }
 
       if (newMessages.length > 0 && handler) {

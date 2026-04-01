@@ -158,8 +158,8 @@ const engine = createConversationEngine({
   mcpConfig: mcpConfigPath,
   resumeSessionId: previousSession?.sessionId,
   additionalArgs: [
-    // Strip personal hooks/plugins from subprocess to reduce token overhead
-    '--setting-sources', 'project',
+    // Strip all user/local hooks/plugins from subprocess to minimize token overhead
+    '--setting-sources', '',
   ],
 })
 
