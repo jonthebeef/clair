@@ -314,6 +314,15 @@ engine.onMessage((msg: StreamMessage) => {
           }
         }
 
+        // Track threads Clair replies to (so we can poll them for follow-ups)
+        const isCastReply = typed.type === 'tool_use' && (toolName === 'cast_reply' || toolName?.endsWith('__cast_reply'))
+        if (isCastReply && castPoller) {
+          const input = typed.input as { message_id?: string } | undefined
+          if (input?.message_id) {
+            castPoller.trackThread(input.message_id)
+          }
+        }
+
         // Intercept switch_model tool calls — queue restart for after turn completes
         const isSwitchModel = typed.type === 'tool_use' && (toolName === 'switch_model' || toolName?.endsWith('__switch_model'))
         if (isSwitchModel) {
@@ -424,6 +433,11 @@ if (!flags['no-cast']) {
       })
       console.log(formatCastMessage(msg.author, msg.content, msg.threadId))
       statusLine.update({ mode: 'listening', lastActivity: `cast: ${msg.author}` })
+
+      // Track threads we receive messages from
+      if (msg.threadId && castPoller) {
+        castPoller.trackThread(msg.threadId, msg.branch)
+      }
     }
   })
 }

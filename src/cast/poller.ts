@@ -130,6 +130,7 @@ export type CastPoller = {
   start(): void
   stop(): void
   onNewMessages(handler: (messages: CastMessage[]) => void): void
+  trackThread(parentId: string, branch?: string): void
 }
 
 export function createCastPoller(opts: {
@@ -223,9 +224,50 @@ export function createCastPoller(opts: {
     }
   }
 
+  // --- Thread polling: watch threads Clair has replied to ---
+
+  const trackedThreads = new Set<string>()
+  const threadBranches = new Map<string, string>() // parentId → branch
+
+  async function pollThreads() {
+    for (const parentId of trackedThreads) {
+      try {
+        const data = await castApiFetch(`/threads/${parentId}`) as {
+          message: ApiBranchMessage
+          replies: ApiBranchMessage[]
+        }
+
+        const branch = threadBranches.get(parentId)
+        const newReplies: CastMessage[] = []
+
+        for (const r of data.replies) {
+          if (seenIds.has(r.id)) continue
+          if (opts.selfUsername && r.author_id === opts.selfUsername) continue
+          seenIds.add(r.id)
+          newReplies.push({
+            id: r.id,
+            author: r.display_name ?? r.author_id,
+            authorId: r.author_id,
+            content: r.content,
+            timestamp: r.created_at,
+            threadId: parentId,
+            branch,
+          })
+        }
+
+        if (newReplies.length > 0 && handler) {
+          handler(newReplies)
+        }
+      } catch {
+        // Thread may have been deleted
+      }
+    }
+  }
+
   async function poll() {
     await pollBranch()
     await pollNotifications()
+    await pollThreads()
   }
 
   return {
@@ -241,6 +283,10 @@ export function createCastPoller(opts: {
     },
     onNewMessages(h) {
       handler = h
+    },
+    trackThread(parentId: string, branch?: string) {
+      trackedThreads.add(parentId)
+      if (branch) threadBranches.set(parentId, branch)
     },
   }
 }
