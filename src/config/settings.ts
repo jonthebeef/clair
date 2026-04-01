@@ -27,6 +27,7 @@ const CONFIG_PATH = join(homedir(), '.clair', 'config.json')
 
 const DEFAULTS: ClairConfig = {
   tickIntervalMs: 30_000,
+  model: 'haiku',
   cast: {
     branches: ['clair-private'],
     pollIntervalMs: 3_000,

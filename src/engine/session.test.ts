@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from 'bun:test'
-import { existsSync, unlinkSync } from 'fs'
+import { unlinkSync } from 'fs'
 import { loadSession, saveSession, clearSession, type SessionInfo } from './session'
 
 const TEST_PATH = '/tmp/clair-test-session.json'
@@ -10,7 +10,7 @@ describe('session persistence', () => {
   })
 
   test('loadSession returns null when no file', () => {
-    expect(loadSession()).toBeNull()
+    expect(loadSession(TEST_PATH)).toBeNull()
   })
 
   test('saveSession and loadSession roundtrip', () => {
@@ -19,8 +19,8 @@ describe('session persistence', () => {
       startedAt: '2026-04-01T00:00:00Z',
       lastActivity: '2026-04-01T01:00:00Z',
     }
-    saveSession(info)
-    const loaded = loadSession()
+    saveSession(info, TEST_PATH)
+    const loaded = loadSession(TEST_PATH)
     expect(loaded).not.toBeNull()
     expect(loaded!.sessionId).toBe('abc-123')
   })
@@ -30,8 +30,8 @@ describe('session persistence', () => {
       sessionId: 'test',
       startedAt: '2026-04-01T00:00:00Z',
       lastActivity: '2026-04-01T00:00:00Z',
-    })
-    clearSession()
-    expect(loadSession()).toBeNull()
+    }, TEST_PATH)
+    clearSession(TEST_PATH)
+    expect(loadSession(TEST_PATH)).toBeNull()
   })
 })

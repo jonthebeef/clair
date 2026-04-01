@@ -15,10 +15,11 @@ export type SessionInfo = {
   lastActivity: string
 }
 
-export function loadSession(): SessionInfo | null {
+export function loadSession(customPath?: string): SessionInfo | null {
+  const path = customPath ?? SESSION_PATH
   try {
-    if (!existsSync(SESSION_PATH)) return null
-    const data = JSON.parse(readFileSync(SESSION_PATH, 'utf-8'))
+    if (!existsSync(path)) return null
+    const data = JSON.parse(readFileSync(path, 'utf-8'))
     if (!data.sessionId) return null
     return data
   } catch {
@@ -26,15 +27,17 @@ export function loadSession(): SessionInfo | null {
   }
 }
 
-export function saveSession(info: SessionInfo): void {
-  const dir = dirname(SESSION_PATH)
+export function saveSession(info: SessionInfo, customPath?: string): void {
+  const path = customPath ?? SESSION_PATH
+  const dir = dirname(path)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(SESSION_PATH, JSON.stringify(info, null, 2) + '\n')
+  writeFileSync(path, JSON.stringify(info, null, 2) + '\n')
 }
 
-export function clearSession(): void {
+export function clearSession(customPath?: string): void {
+  const path = customPath ?? SESSION_PATH
   try {
-    if (existsSync(SESSION_PATH)) unlinkSync(SESSION_PATH)
+    if (existsSync(path)) unlinkSync(path)
   } catch {
     // Non-critical
   }

@@ -60,7 +60,9 @@ export type ConversationEngine = {
   onMessage(handler: (msg: StreamMessage) => void): void
   start(): Promise<void>
   stop(): void
+  restart(overrides: { model?: string; resumeSessionId?: string }): Promise<void>
   isRunning(): boolean
+  getModel(): string | undefined
 }
 
 export function createConversationEngine(
@@ -68,11 +70,45 @@ export function createConversationEngine(
 ): ConversationEngine {
   let proc: Subprocess | null = null
   let messageHandler: ((msg: StreamMessage) => void) | null = null
+  let currentOpts = { ...opts }
+
+  function spawnProcess() {
+    const args = buildClaudeArgs(currentOpts)
+    proc = spawn(['claude', ...args], {
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'inherit',
+    })
+
+    const stdout = proc.stdout as ReadableStream<Uint8Array>
+    const reader = stdout.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    const readLoop = async () => {
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+          for (const line of lines) {
+            const msg = parseStreamMessage(line)
+            if (msg && messageHandler) messageHandler(msg)
+          }
+        }
+      } catch {
+        // Process exited
+      }
+    }
+
+    readLoop().catch(() => {})
+  }
 
   return {
     send(content: string) {
       if (!proc?.stdin) throw new Error('Claude process not running')
-      // Bun's spawn stdin is a FileSink, not a WritableStream
       const stdin = proc.stdin as unknown as { write(data: string | Uint8Array): number; flush(): void }
       stdin.write(formatUserMessage(content) + '\n')
       stdin.flush()
@@ -83,38 +119,7 @@ export function createConversationEngine(
     },
 
     async start() {
-      const args = buildClaudeArgs(opts)
-      proc = spawn(['claude', ...args], {
-        stdin: 'pipe',
-        stdout: 'pipe',
-        stderr: 'inherit',
-      })
-
-      // Bun's stdout is a ReadableStream<Uint8Array>
-      const stdout = proc.stdout as ReadableStream<Uint8Array>
-      const reader = stdout.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      const readLoop = async () => {
-        try {
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            buffer += decoder.decode(value, { stream: true })
-            const lines = buffer.split('\n')
-            buffer = lines.pop() ?? ''
-            for (const line of lines) {
-              const msg = parseStreamMessage(line)
-              if (msg && messageHandler) messageHandler(msg)
-            }
-          }
-        } catch {
-          // Process exited
-        }
-      }
-
-      readLoop().catch(() => {})
+      spawnProcess()
     },
 
     stop() {
@@ -122,8 +127,28 @@ export function createConversationEngine(
       proc = null
     },
 
+    async restart(overrides) {
+      // Kill current process
+      proc?.kill()
+      proc = null
+
+      // Wait a beat for process cleanup
+      await new Promise(r => setTimeout(r, 500))
+
+      // Update options
+      if (overrides.model) currentOpts.model = overrides.model
+      if (overrides.resumeSessionId) currentOpts.resumeSessionId = overrides.resumeSessionId
+
+      // Respawn
+      spawnProcess()
+    },
+
     isRunning() {
       return proc !== null
+    },
+
+    getModel() {
+      return currentOpts.model
     },
   }
 }

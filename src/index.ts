@@ -149,13 +149,26 @@ if (previousSession) {
   console.log(formatStatus(`Resuming session ${previousSession.sessionId.slice(0, 8)}...`))
 }
 
+const defaultModel = (flags.model as string | undefined) ?? config.model ?? 'haiku'
+
 const engine = createConversationEngine({
   systemPrompt,
-  model: flags.model as string | undefined,
+  model: defaultModel,
   skipPermissions: flags['skip-permissions'] as boolean | undefined,
   mcpConfig: mcpConfigPath,
   resumeSessionId: previousSession?.sessionId,
+  additionalArgs: [
+    // Strip personal hooks/plugins from subprocess to reduce token overhead
+    '--setting-sources', 'project',
+  ],
 })
+
+function shortModelName(model: string): string {
+  if (model.includes('opus')) return 'opus'
+  if (model.includes('sonnet')) return 'sonnet'
+  if (model.includes('haiku')) return 'haiku'
+  return model.replace(/^claude-/, '').replace(/\[.*\]$/, '')
+}
 
 function truncateStatus(s: string): string {
   const line = s.split('\n')[0].trim()
@@ -167,6 +180,8 @@ function truncateStatus(s: string): string {
 let sessionCostUsd = 0
 let sessionInputTokens = 0
 let sessionOutputTokens = 0
+let currentModel = ''
+let pendingModelSwitch: string | null = null
 
 // --- Handle Claude's responses ---
 
@@ -182,7 +197,23 @@ engine.onMessage((msg: StreamMessage) => {
     })
   }
 
-  // Capture cost from result messages
+  // Capture model from init or assistant messages
+  if (msg.type === 'system' && (msg as Record<string, unknown>).subtype === 'init') {
+    const model = (msg as Record<string, unknown>).model as string | undefined
+    if (model) {
+      currentModel = shortModelName(model)
+      statusLine.update({ model: currentModel })
+    }
+  }
+  if (msg.type === 'assistant') {
+    const model = (msg.message as Record<string, unknown> | undefined)?.model as string | undefined
+    if (model) {
+      currentModel = shortModelName(model)
+      statusLine.update({ model: currentModel })
+    }
+  }
+
+  // Capture cost + tokens from result messages
   if (msg.type === 'result') {
     const cost = (msg as Record<string, unknown>).total_cost_usd as number | undefined
     const usage = (msg as Record<string, unknown>).usage as Record<string, unknown> | undefined
@@ -191,7 +222,25 @@ engine.onMessage((msg: StreamMessage) => {
       sessionInputTokens += (usage.input_tokens as number ?? 0) + (usage.cache_read_input_tokens as number ?? 0)
       sessionOutputTokens += (usage.output_tokens as number ?? 0)
     }
-    statusLine.update({ cost: sessionCostUsd })
+    statusLine.update({
+      cost: sessionCostUsd,
+      tokensIn: sessionInputTokens,
+      tokensOut: sessionOutputTokens,
+    })
+
+    // Execute pending model switch after turn completes
+    if (pendingModelSwitch && currentSessionId) {
+      const newModel = pendingModelSwitch
+      pendingModelSwitch = null
+      console.log(formatStatus(`Restarting with model: ${newModel}`))
+      engine.restart({ model: newModel, resumeSessionId: currentSessionId }).then(() => {
+        currentModel = newModel
+        statusLine.update({ model: newModel })
+        console.log(formatStatus(`Now running on ${newModel}`))
+      }).catch(err => {
+        console.error('Model switch failed:', err)
+      })
+    }
   }
 
   if (msg.type === 'assistant') {
@@ -265,10 +314,21 @@ engine.onMessage((msg: StreamMessage) => {
           }
         }
 
+        // Intercept switch_model tool calls — queue restart for after turn completes
+        const isSwitchModel = typed.type === 'tool_use' && (toolName === 'switch_model' || toolName?.endsWith('__switch_model'))
+        if (isSwitchModel) {
+          const input = typed.input as { model?: string; reason?: string } | undefined
+          if (input?.model && input.model !== currentModel) {
+            pendingModelSwitch = input.model
+            const reason = input.reason ? ` — ${input.reason}` : ''
+            console.log(formatClairText(`Switching to ${input.model}${reason}`))
+          }
+        }
+
         // Display tool calls (collapsed) — skip handled tools and internal ToolSearch
         const isInternal = toolName === 'ToolSearch' || toolName?.endsWith('__ToolSearch')
         const isSchedulerTool = isScheduleTask || isRemoveTask || isListTasks
-        if (typed.type === 'tool_use' && !isSleep && !isInternal && !isSchedulerTool) {
+        if (typed.type === 'tool_use' && !isSleep && !isInternal && !isSchedulerTool && !isSwitchModel) {
           console.log(formatToolCall({
             name: typed.name as string,
             input: typed.input as Record<string, unknown>,

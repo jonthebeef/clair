@@ -18,6 +18,9 @@ export type StatusState = {
   castConnected?: boolean
   lastActivity?: string // brief description
   cost?: number // session cost in USD
+  model?: string // current model short name
+  tokensIn?: number // cumulative input tokens
+  tokensOut?: number // cumulative output tokens
 }
 
 export type StatusLine = {
@@ -78,14 +81,20 @@ export function createStatusLine(): StatusLine {
       parts.push(state.focused ? `${DIM}[focused]${RESET}` : `${DIM}[away]${RESET}`)
     }
 
-    // Cast
-    if (state.castConnected) {
-      parts.push(`${CYAN}cast${RESET}`)
+    // Model
+    if (state.model) {
+      parts.push(`${CYAN}${state.model}${RESET}`)
     }
 
-    // Cost
+    // Cast
+    if (state.castConnected) {
+      parts.push(`${DIM}cast${RESET}`)
+    }
+
+    // Cost + tokens
     if (state.cost !== undefined && state.cost > 0) {
-      parts.push(`${DIM}$${state.cost.toFixed(2)}${RESET}`)
+      const tokens = formatTokens(state.tokensIn, state.tokensOut)
+      parts.push(`${DIM}$${state.cost.toFixed(2)}${tokens ? ` (${tokens})` : ''}${RESET}`)
     }
 
     // Last activity
@@ -135,6 +144,12 @@ export function createStatusLine(): StatusLine {
       return { ...state }
     },
   }
+}
+
+function formatTokens(inTokens?: number, outTokens?: number): string {
+  if (!inTokens && !outTokens) return ''
+  const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+  return `${fmt(inTokens ?? 0)} in / ${fmt(outTokens ?? 0)} out`
 }
 
 /** Format a timestamp as HH:MM for sleep display */
