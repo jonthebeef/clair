@@ -35,10 +35,15 @@ const DEFAULTS: ClairConfig = {
   },
 }
 
-export function loadConfig(): ClairConfig {
+export function loadConfig(customPath?: string): ClairConfig {
+  const configPath = customPath ?? CONFIG_PATH
   try {
-    if (!existsSync(CONFIG_PATH)) return DEFAULTS
-    const text = readFileSync(CONFIG_PATH, 'utf-8')
+    if (!existsSync(configPath)) {
+      // First run — write defaults so the user has something to edit
+      ensureConfigExists(configPath)
+      return DEFAULTS
+    }
+    const text = readFileSync(configPath, 'utf-8')
     const parsed = JSON.parse(text)
     return {
       ...DEFAULTS,
@@ -51,10 +56,21 @@ export function loadConfig(): ClairConfig {
   }
 }
 
-export function saveConfig(config: ClairConfig): void {
-  const dir = dirname(CONFIG_PATH)
+function ensureConfigExists(configPath: string): void {
+  try {
+    const dir = dirname(configPath)
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    writeFileSync(configPath, JSON.stringify(DEFAULTS, null, 2) + '\n')
+  } catch {
+    // Non-critical — defaults still work
+  }
+}
+
+export function saveConfig(config: ClairConfig, customPath?: string): void {
+  const configPath = customPath ?? CONFIG_PATH
+  const dir = dirname(configPath)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2))
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n')
 }
 
 export function getConfigPath(): string {

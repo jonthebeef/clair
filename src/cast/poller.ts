@@ -170,8 +170,8 @@ export function createCastPoller(opts: {
         if (newMsgs.length > 0 && handler) {
           handler(newMsgs)
         }
-      } catch {
-        // API failed — skip this poll cycle
+      } catch (err) {
+        if (process.env.CLAIR_DEBUG) console.error(`[poller] branch ${branch} error:`, err)
       }
     }
   }
@@ -185,17 +185,12 @@ export function createCastPoller(opts: {
         unread_count: number
       }
 
-      if (data.unread_count === 0) {
-        notificationsSeeded = true
-        return
-      }
-
       if (!notificationsSeeded) {
         // First poll: mark existing notifications as seen without emitting
         for (const notif of data.notifications) {
           seenIds.add(notif.message_id)
         }
-        await markNotificationsRead()
+        if (data.unread_count > 0) await markNotificationsRead()
         notificationsSeeded = true
         return
       }
@@ -203,7 +198,6 @@ export function createCastPoller(opts: {
       const newMessages: CastMessage[] = []
 
       for (const notif of data.notifications) {
-        if (notif.read) continue
         if (notif.actor_id === 'clair') continue
         if (notif.type === 'reaction') continue
         if (seenIds.has(notif.message_id)) continue
@@ -226,8 +220,8 @@ export function createCastPoller(opts: {
       if (newMessages.length > 0 && handler) {
         handler(newMessages)
       }
-    } catch {
-      // API failed — skip this poll cycle
+    } catch (err) {
+      if (process.env.CLAIR_DEBUG) console.error('[poller] notifications error:', err)
     }
   }
 

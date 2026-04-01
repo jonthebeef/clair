@@ -27,6 +27,7 @@ import {
   formatStatus,
   formatShutdown,
 } from './ui/terminal'
+import { createStatusLine, formatWakeTime } from './ui/status'
 
 const VERSION = '0.1.0'
 
@@ -35,6 +36,7 @@ const { values: flags } = parseArgs({
     help: { type: 'boolean', short: 'h' },
     version: { type: 'boolean', short: 'v' },
     model: { type: 'string', short: 'm' },
+    config: { type: 'string', short: 'c' },
     'skip-permissions': { type: 'boolean' },
     'no-cast': { type: 'boolean' },
   },
@@ -50,6 +52,7 @@ Options:
   -h, --help              Show this help
   -v, --version           Show version
   -m, --model <model>     Claude model (default: from config)
+  -c, --config <path>     Config file path (default: ~/.clair/config.json)
   --skip-permissions      Skip permission checks (dangerous)
   --no-cast               Disable Cast channel integration
 `)
@@ -66,9 +69,10 @@ if (flags.version) {
 console.log(formatBoot(VERSION))
 console.log()
 
-const config = loadConfig()
+const config = loadConfig(flags.config as string | undefined)
 const queue = createMessageQueue()
 const systemPrompt = getProactiveSystemPrompt(config)
+const statusLine = createStatusLine()
 
 // --- Cast API client (Clair's own identity) ---
 
@@ -138,6 +142,11 @@ const engine = createConversationEngine({
   mcpConfig: mcpConfigPath,
 })
 
+function truncateStatus(s: string): string {
+  const line = s.split('\n')[0].trim()
+  return line.length > 40 ? line.slice(0, 37) + '...' : line
+}
+
 // --- Handle Claude's responses ---
 
 engine.onMessage((msg: StreamMessage) => {
@@ -153,6 +162,7 @@ engine.onMessage((msg: StreamMessage) => {
           if (text.trim()) {
             console.log(formatClairText(text))
             forwardToCast(text.trim())
+            statusLine.update({ mode: 'working', lastActivity: truncateStatus(text) })
           }
         }
 
@@ -165,6 +175,7 @@ engine.onMessage((msg: StreamMessage) => {
           const ms = parseSleepDuration(duration)
           tickLoop.setSleepDuration(ms)
           console.log(formatSleep(duration, ms))
+          statusLine.update({ mode: 'sleeping', sleepUntil: formatWakeTime(ms) })
         }
 
         // Display tool calls (collapsed) — skip Sleep (already displayed) and internal ToolSearch
@@ -253,6 +264,7 @@ if (!flags['no-cast']) {
         priority: 'next',
       })
       console.log(formatCastMessage(msg.author, msg.content, msg.threadId))
+      statusLine.update({ mode: 'listening', lastActivity: `cast: ${msg.author}` })
     }
   })
 }
@@ -273,6 +285,8 @@ async function mainLoop() {
   }
   console.log()
 
+  statusLine.update({ mode: 'idle', castConnected: !flags['no-cast'] })
+
   while (engine.isRunning()) {
     const msg = await queue.waitForMessage()
 
@@ -287,7 +301,7 @@ async function mainLoop() {
     // Inject terminal focus into tick messages
     for (const m of latest) {
       const focused = await isTerminalFocused()
-      // Replace the tick content with an updated version that includes focus
+      statusLine.update({ focused })
       if (m.content.includes('<tick')) {
         m.content = m.content.replace(
           /<tick([^>]*)>/,
@@ -305,6 +319,7 @@ async function mainLoop() {
 // --- Graceful shutdown ---
 
 process.on('SIGINT', () => {
+  statusLine.clear()
   console.log(formatShutdown())
   tickLoop.stop()
   castPoller?.stop()
