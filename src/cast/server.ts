@@ -59,14 +59,7 @@ const SCHEDULE_TOOLS = [
 
 const SWITCH_MODEL_TOOL = {
   name: 'switch_model',
-  description: `Switch to a different Claude model. Use this BEFORE starting work that needs a different capability level.
-
-Rules:
-- **haiku**: Use for greetings, simple replies, status checks, Cast chit-chat, sleep decisions. CHEAPEST.
-- **sonnet**: Use for standard coding tasks, refactoring, writing tests, multi-file edits, moderate debugging.
-- **opus**: Use ONLY for architecture decisions, complex debugging across many files, ambiguous requirements, security-sensitive changes, or novel problems.
-
-You start on haiku. Escalate when the task demands it, then switch back to haiku when done.`,
+  description: 'Switch to a different Claude model (haiku/sonnet/opus). See system prompt for when to use each.',
   inputSchema: {
     type: 'object' as const,
     properties: {
