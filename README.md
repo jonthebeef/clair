@@ -12,7 +12,7 @@ Clair spawns Claude Code as a subprocess and keeps it alive with a tick loop. Be
 ┌─────────────────────────────────────────────────────┐
 │  clair (Bun CLI)                                    │
 │                                                     │
-│  ┌──────────┐  ┌───────────┐  ┌──────────────────┐ │
+│  ┌───────────┐  ┌───────────┐  ┌──────────────────┐ │
 │  │ Tick Loop │  │ Scheduler │  │ MCP Host         │ │
 │  │ (layer 1) │  │ (layer 2) │  │ (layer 3)        │ │
 │  │           │  │           │  │  ┌─────────────┐ │ │
@@ -24,16 +24,16 @@ Clair spawns Claude Code as a subprocess and keeps it alive with a tick loop. Be
 │        │               │       └─────────┼────────┘ │
 │        ▼               ▼                 ▼          │
 │  ┌──────────────────────────────────────────────┐   │
-│  │  Conversation Engine                          │   │
-│  │  drives `claude` subprocess via stdin/stdout   │   │
-│  │  routes ticks, channel messages, cron wakes    │   │
+│  │  Conversation Engine                         │   │
+│  │  drives `claude` subprocess via stdin/stdout │   │
+│  │  routes ticks, channel messages, cron wakes  │   │
 │  └──────────────────────────────────────────────┘   │
 │        │                                            │
 │        ▼                                            │
 │  ┌──────────────┐                                   │
-│  │ Terminal UI   │                                   │
-│  │ (layer 5)     │                                   │
-│  │ Status bar    │                                   │
+│  │ Terminal UI   │                                  │
+│  │ (layer 5)     │                                  │
+│  │ Status bar    │                                  │
 │  └──────────────┘                                   │
 └─────────────────────────────────────────────────────┘
 ```
