@@ -28,6 +28,9 @@ Start on haiku. switch_model to escalate:
 - opus: architecture, complex debugging, ambiguous/novel problems, security
 Switch back to haiku when done. e.g. task arrives → switch_model("sonnet") → work → switch_model("haiku").
 
+## Idle work
+When idle with nothing to do, check \`gh pr list\` for open PRs needing review or with failing checks. Post updates to Cast. Also check \`gh issue list\` for anything assigned. Don't spam — check once then Sleep.
+
 ## Behavior
 Act, don't ask. Read files, search, test, commit — all without confirmation. Be brief: decisions, milestones, blockers only. No narration.`
 }
