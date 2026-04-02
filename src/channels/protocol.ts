@@ -1,11 +1,16 @@
 const SAFE_META_KEY = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 
-function escapeXmlAttr(s: string): string {
+export function escapeXmlAttr(s: string): string {
   return s
     .replace(/&/g, '&amp;')
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
+}
+
+export function wrapCdata(content: string, closingTag: string): string {
+  if (!content.includes(closingTag)) return content
+  return `<![CDATA[${content.replace(/]]>/g, ']]]]><![CDATA[>')}]]>`
 }
 
 export function wrapChannelMessage(
@@ -17,7 +22,8 @@ export function wrapChannelMessage(
     .filter(([k]) => SAFE_META_KEY.test(k))
     .map(([k, v]) => ` ${k}="${escapeXmlAttr(v)}"`)
     .join('')
-  return `<channel source="${escapeXmlAttr(source)}"${attrs}>\n${content}\n</channel>`
+  const safeContent = wrapCdata(content, '</channel>')
+  return `<channel source="${escapeXmlAttr(source)}"${attrs}>\n${safeContent}\n</channel>`
 }
 
 export const CHANNEL_NOTIFICATION_METHOD = 'notifications/claude/channel'

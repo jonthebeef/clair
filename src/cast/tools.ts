@@ -1,13 +1,4 @@
-import { readFileSync } from 'fs'
-import { join } from 'path'
-import { homedir } from 'os'
-
-const CAST_CONFIG_PATH = process.env.CLAIR_CASTRC ?? join(homedir(), '.clair-castrc')
-
-function loadCastConfig(): { apiUrl: string; token: string } {
-  const raw = readFileSync(CAST_CONFIG_PATH, 'utf-8')
-  return JSON.parse(raw)
-}
+import { loadCastConfig } from './config'
 
 async function castApi(
   method: string,
