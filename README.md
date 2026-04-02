@@ -31,9 +31,9 @@ Clair spawns Claude Code as a subprocess and keeps it alive with a tick loop. Be
 │        │                                            │
 │        ▼                                            │
 │  ┌──────────────┐                                   │
-│  │ Terminal UI   │                                  │
-│  │ (layer 5)     │                                  │
-│  │ Status bar    │                                  │
+│  │ Terminal UI  │                                   │
+│  │ (layer 5)    │                                   │
+│  │ Status bar   │                                   │
 │  └──────────────┘                                   │
 └─────────────────────────────────────────────────────┘
 ```
