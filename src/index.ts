@@ -92,17 +92,21 @@ try {
 
 async function castApiPost(content: string, branchId?: string): Promise<void> {
   if (!castConfig) return
-  await fetch(`${castConfig.apiUrl}/messages`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${castConfig.token}`,
-    },
-    body: JSON.stringify({
-      content,
-      branch_id: branchId ?? config.cast.privateBranch,
-    }),
-  })
+  try {
+    await fetch(`${castConfig.apiUrl}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${castConfig.token}`,
+      },
+      body: JSON.stringify({
+        content,
+        branch_id: branchId ?? config.cast.privateBranch,
+      }),
+    })
+  } catch (err) {
+    if (process.env.CLAIR_DEBUG) console.error('[castApiPost] fetch error:', err)
+  }
 }
 
 async function forwardToCast(text: string) {
@@ -488,7 +492,11 @@ async function mainLoop() {
     }
 
     for (const m of [...nonTicks, ...latest]) {
-      engine.send(m.content)
+      try {
+        engine.send(m.content)
+      } catch (err) {
+        console.error('[mainLoop] engine.send failed:', err)
+      }
     }
   }
 }
