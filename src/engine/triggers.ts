@@ -9,7 +9,7 @@
  */
 
 import { timingSafeEqual } from 'crypto'
-import { escapeXmlAttr } from '../channels/protocol'
+import { escapeXmlAttr, wrapCdata } from '../channels/protocol'
 import type { MessageQueue } from './queue'
 
 export type TriggerServer = {
@@ -65,7 +65,8 @@ export function createTriggerServer(opts: {
               }
 
               const source = body.source ?? 'webhook'
-              const content = `<trigger source="${escapeXmlAttr(source)}">\n${body.prompt}\n</trigger>`
+              const safePrompt = wrapCdata(body.prompt, '</trigger>')
+              const content = `<trigger source="${escapeXmlAttr(source)}">\n${safePrompt}\n</trigger>`
 
               opts.queue.enqueue({
                 type: 'channel',

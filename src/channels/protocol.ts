@@ -8,6 +8,11 @@ export function escapeXmlAttr(s: string): string {
     .replace(/>/g, '&gt;')
 }
 
+export function wrapCdata(content: string, closingTag: string): string {
+  if (!content.includes(closingTag)) return content
+  return `<![CDATA[${content.replace(/]]>/g, ']]]]><![CDATA[>')}]]>`
+}
+
 export function wrapChannelMessage(
   source: string,
   content: string,
@@ -17,7 +22,7 @@ export function wrapChannelMessage(
     .filter(([k]) => SAFE_META_KEY.test(k))
     .map(([k, v]) => ` ${k}="${escapeXmlAttr(v)}"`)
     .join('')
-  const safeContent = content.includes('</channel>') ? `<![CDATA[${content.replace(/]]>/g, ']]]]><![CDATA[>')}]]>` : content
+  const safeContent = wrapCdata(content, '</channel>')
   return `<channel source="${escapeXmlAttr(source)}"${attrs}>\n${safeContent}\n</channel>`
 }
 

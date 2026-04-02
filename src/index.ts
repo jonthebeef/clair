@@ -224,10 +224,12 @@ engine.onMessage((msg: StreamMessage) => {
     const isFinalResult = record.subtype === 'success' || record.stop_reason != null
     const cost = record.total_cost_usd as number | undefined
     const usage = record.usage as Record<string, unknown> | undefined
-    if (cost && isFinalResult) sessionCostUsd += cost
-    if (usage) {
-      sessionInputTokens += (usage.input_tokens as number ?? 0) + (usage.cache_read_input_tokens as number ?? 0)
-      sessionOutputTokens += (usage.output_tokens as number ?? 0)
+    if (isFinalResult) {
+      if (cost) sessionCostUsd += cost
+      if (usage) {
+        sessionInputTokens += (usage.input_tokens as number ?? 0) + (usage.cache_read_input_tokens as number ?? 0)
+        sessionOutputTokens += (usage.output_tokens as number ?? 0)
+      }
     }
     statusLine.update({
       cost: sessionCostUsd,
@@ -239,6 +241,7 @@ engine.onMessage((msg: StreamMessage) => {
     if (pendingModelSwitch && currentSessionId) {
       const newModel = pendingModelSwitch
       pendingModelSwitch = null
+      isRestarting = true
       console.log(formatStatus(`Restarting with model: ${newModel}`))
       engine.restart({ model: newModel, resumeSessionId: currentSessionId }).then(() => {
         currentModel = newModel
@@ -246,6 +249,8 @@ engine.onMessage((msg: StreamMessage) => {
         console.log(formatStatus(`Now running on ${newModel}`))
       }).catch(err => {
         console.error('Model switch failed:', err)
+      }).finally(() => {
+        isRestarting = false
       })
     }
   }
@@ -494,9 +499,17 @@ async function mainLoop() {
       }
     }
 
-    for (const m of [...nonTicks, ...latest]) {
+    const toSend = [...nonTicks, ...latest]
+    for (let i = 0; i < toSend.length; i++) {
+      if (isRestarting) {
+        // Re-enqueue unsent messages so they aren't lost
+        for (let j = i; j < toSend.length; j++) {
+          queue.enqueue(toSend[j])
+        }
+        break
+      }
       try {
-        engine.send(m.content)
+        engine.send(toSend[i].content)
       } catch (err) {
         console.error('[mainLoop] engine.send failed:', err)
       }

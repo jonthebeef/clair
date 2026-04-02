@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { wrapChannelMessage, parseChannelNotification } from './protocol'
+import { wrapChannelMessage, wrapCdata, parseChannelNotification } from './protocol'
 
 describe('wrapChannelMessage', () => {
   test('wraps content in channel tags with source', () => {
@@ -30,6 +30,39 @@ describe('wrapChannelMessage', () => {
       author: 'Jon & "friends"',
     })
     expect(wrapped).toContain('author="Jon &amp; &quot;friends&quot;"')
+  })
+
+  test('wraps content in CDATA when it contains closing tag', () => {
+    const wrapped = wrapChannelMessage('cast:main', 'before </channel> after')
+    expect(wrapped).toContain('<![CDATA[before </channel> after]]>')
+    expect(wrapped).not.toContain('\nbefore </channel> after\n')
+  })
+
+  test('does not use CDATA when content is safe', () => {
+    const wrapped = wrapChannelMessage('cast:main', 'safe content')
+    expect(wrapped).not.toContain('CDATA')
+    expect(wrapped).toContain('\nsafe content\n')
+  })
+
+  test('escapes ]]> inside CDATA content', () => {
+    const wrapped = wrapChannelMessage('cast:main', 'a]]></channel>b')
+    expect(wrapped).toContain('<![CDATA[a]]]]><![CDATA[></channel>b]]>')
+  })
+})
+
+describe('wrapCdata', () => {
+  test('returns content unchanged when no closing tag present', () => {
+    expect(wrapCdata('hello world', '</trigger>')).toBe('hello world')
+  })
+
+  test('wraps in CDATA when closing tag is present', () => {
+    const result = wrapCdata('bad </trigger> stuff', '</trigger>')
+    expect(result).toBe('<![CDATA[bad </trigger> stuff]]>')
+  })
+
+  test('escapes ]]> sequences inside CDATA', () => {
+    const result = wrapCdata('a]]></trigger>b', '</trigger>')
+    expect(result).toBe('<![CDATA[a]]]]><![CDATA[></trigger>b]]>')
   })
 })
 

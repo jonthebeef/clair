@@ -141,17 +141,6 @@ export function createConversationEngine(
 
       // Respawn
       spawnProcess()
-
-      // Verify the new process started successfully
-      if (!proc) {
-        console.error('[conversation] restart failed: spawnProcess did not create a process')
-        return
-      }
-      const p = proc as Subprocess
-      if (!p.stdin) {
-        console.error('[conversation] restart failed: process stdin is not writable')
-        proc = null
-      }
     },
 
     isRunning() {
