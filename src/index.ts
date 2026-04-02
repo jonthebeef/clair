@@ -2,7 +2,7 @@
 
 import { parseArgs } from 'util'
 import { resolve, join } from 'path'
-import { writeFileSync, readFileSync } from 'fs'
+import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs'
 import { homedir } from 'os'
 import { loadConfig } from './config/settings'
 import { getProactiveSystemPrompt } from './config/prompts'
@@ -137,7 +137,9 @@ if (!flags['no-cast']) {
       },
     },
   }
-  mcpConfigPath = '/tmp/clair-mcp.json'
+  const clairDir = join(homedir(), '.clair')
+  if (!existsSync(clairDir)) mkdirSync(clairDir, { recursive: true })
+  mcpConfigPath = join(clairDir, 'mcp-config.json')
   writeFileSync(mcpConfigPath, JSON.stringify(castMcpConfig))
 }
 
@@ -182,6 +184,7 @@ let sessionInputTokens = 0
 let sessionOutputTokens = 0
 let currentModel = ''
 let pendingModelSwitch: string | null = null
+let isRestarting = false
 
 // --- Handle Claude's responses ---
 
@@ -213,11 +216,13 @@ engine.onMessage((msg: StreamMessage) => {
     }
   }
 
-  // Capture cost + tokens from result messages
+  // Capture cost + tokens from final result messages only (skip intermediate tool results)
   if (msg.type === 'result') {
-    const cost = (msg as Record<string, unknown>).total_cost_usd as number | undefined
-    const usage = (msg as Record<string, unknown>).usage as Record<string, unknown> | undefined
-    if (cost) sessionCostUsd += cost
+    const record = msg as Record<string, unknown>
+    const isFinalResult = record.subtype === 'success' || record.stop_reason != null
+    const cost = record.total_cost_usd as number | undefined
+    const usage = record.usage as Record<string, unknown> | undefined
+    if (cost && isFinalResult) sessionCostUsd += cost
     if (usage) {
       sessionInputTokens += (usage.input_tokens as number ?? 0) + (usage.cache_read_input_tokens as number ?? 0)
       sessionOutputTokens += (usage.output_tokens as number ?? 0)
@@ -232,6 +237,7 @@ engine.onMessage((msg: StreamMessage) => {
     if (pendingModelSwitch && currentSessionId) {
       const newModel = pendingModelSwitch
       pendingModelSwitch = null
+      isRestarting = true
       console.log(formatStatus(`Restarting with model: ${newModel}`))
       engine.restart({ model: newModel, resumeSessionId: currentSessionId }).then(() => {
         currentModel = newModel
@@ -239,6 +245,8 @@ engine.onMessage((msg: StreamMessage) => {
         console.log(formatStatus(`Now running on ${newModel}`))
       }).catch(err => {
         console.error('Model switch failed:', err)
+      }).finally(() => {
+        isRestarting = false
       })
     }
   }
@@ -488,6 +496,7 @@ async function mainLoop() {
     }
 
     for (const m of [...nonTicks, ...latest]) {
+      if (isRestarting) break
       engine.send(m.content)
     }
   }
