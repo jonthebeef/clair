@@ -92,17 +92,21 @@ try {
 
 async function castApiPost(content: string, branchId?: string): Promise<void> {
   if (!castConfig) return
-  await fetch(`${castConfig.apiUrl}/messages`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${castConfig.token}`,
-    },
-    body: JSON.stringify({
-      content,
-      branch_id: branchId ?? config.cast.privateBranch,
-    }),
-  })
+  try {
+    await fetch(`${castConfig.apiUrl}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${castConfig.token}`,
+      },
+      body: JSON.stringify({
+        content,
+        branch_id: branchId ?? config.cast.privateBranch,
+      }),
+    })
+  } catch (err) {
+    if (process.env.CLAIR_DEBUG) console.error('[castApiPost] fetch error:', err)
+  }
 }
 
 async function forwardToCast(text: string) {
@@ -182,6 +186,7 @@ let sessionInputTokens = 0
 let sessionOutputTokens = 0
 let currentModel = ''
 let pendingModelSwitch: string | null = null
+let isRestarting = false
 
 // --- Handle Claude's responses ---
 
@@ -213,11 +218,13 @@ engine.onMessage((msg: StreamMessage) => {
     }
   }
 
-  // Capture cost + tokens from result messages
+  // Capture cost + tokens from final result messages only (skip intermediate tool results)
   if (msg.type === 'result') {
-    const cost = (msg as Record<string, unknown>).total_cost_usd as number | undefined
-    const usage = (msg as Record<string, unknown>).usage as Record<string, unknown> | undefined
-    if (cost) sessionCostUsd += cost
+    const record = msg as Record<string, unknown>
+    const isFinalResult = record.subtype === 'success' || record.stop_reason != null
+    const cost = record.total_cost_usd as number | undefined
+    const usage = record.usage as Record<string, unknown> | undefined
+    if (cost && isFinalResult) sessionCostUsd += cost
     if (usage) {
       sessionInputTokens += (usage.input_tokens as number ?? 0) + (usage.cache_read_input_tokens as number ?? 0)
       sessionOutputTokens += (usage.output_tokens as number ?? 0)
@@ -488,7 +495,11 @@ async function mainLoop() {
     }
 
     for (const m of [...nonTicks, ...latest]) {
-      engine.send(m.content)
+      try {
+        engine.send(m.content)
+      } catch (err) {
+        console.error('[mainLoop] engine.send failed:', err)
+      }
     }
   }
 }

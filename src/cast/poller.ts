@@ -16,9 +16,14 @@ export type CastMessage = {
 
 const CAST_CONFIG_PATH = process.env.CLAIR_CASTRC ?? join(homedir(), '.clair-castrc')
 
+let _cachedCastConfig: { apiUrl: string; token: string } | null = null
+
 function loadCastConfig(): { apiUrl: string; token: string } {
-  const raw = readFileSync(CAST_CONFIG_PATH, 'utf-8')
-  return JSON.parse(raw)
+  if (!_cachedCastConfig) {
+    const raw = readFileSync(CAST_CONFIG_PATH, 'utf-8')
+    _cachedCastConfig = JSON.parse(raw)
+  }
+  return _cachedCastConfig!
 }
 
 async function castApiFetch(path: string): Promise<unknown> {
@@ -28,14 +33,6 @@ async function castApiFetch(path: string): Promise<unknown> {
   })
   if (!res.ok) throw new Error(`Cast API ${res.status}`)
   return res.json()
-}
-
-async function markNotificationsRead(): Promise<void> {
-  const config = loadCastConfig()
-  await fetch(`${config.apiUrl}/notifications/read`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${config.token}` },
-  })
 }
 
 type ApiNotification = {
@@ -62,7 +59,7 @@ type ApiBranchMessage = {
   branch_id: string | null
 }
 
-// --- CLI-based parsing (kept for branch polling which uses your CLI) ---
+// --- CLI-based parsing (only used by tests) ---
 
 export function parseCastOutput(output: string): CastMessage[] {
   const clean = output.replace(/\x1b\[[0-9;]*m/g, '')
@@ -258,8 +255,8 @@ export function createCastPoller(opts: {
         if (newReplies.length > 0 && handler) {
           handler(newReplies)
         }
-      } catch {
-        // Thread may have been deleted
+      } catch (err) {
+        if (process.env.CLAIR_DEBUG) console.error(`[poller] thread ${parentId} error:`, err)
       }
     }
   }
