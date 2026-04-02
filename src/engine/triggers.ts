@@ -8,6 +8,8 @@
  * GET /health — health check
  */
 
+import { timingSafeEqual } from 'crypto'
+import { escapeXmlAttr } from '../channels/protocol'
 import type { MessageQueue } from './queue'
 
 export type TriggerServer = {
@@ -42,8 +44,11 @@ export function createTriggerServer(opts: {
           if (url.pathname === '/trigger' && req.method === 'POST') {
             // Auth check
             if (opts.secret) {
-              const auth = req.headers.get('Authorization')
-              if (auth !== `Bearer ${opts.secret}`) {
+              const auth = req.headers.get('Authorization') ?? ''
+              const expected = `Bearer ${opts.secret}`
+              const authBuf = Buffer.from(auth)
+              const expectedBuf = Buffer.from(expected)
+              if (authBuf.length !== expectedBuf.length || !timingSafeEqual(authBuf, expectedBuf)) {
                 return new Response(JSON.stringify({ error: 'unauthorized' }), {
                   status: 401,
                   headers: { 'Content-Type': 'application/json' },
@@ -60,7 +65,7 @@ export function createTriggerServer(opts: {
               }
 
               const source = body.source ?? 'webhook'
-              const content = `<trigger source="${source}">\n${body.prompt}\n</trigger>`
+              const content = `<trigger source="${escapeXmlAttr(source)}">\n${body.prompt}\n</trigger>`
 
               opts.queue.enqueue({
                 type: 'channel',

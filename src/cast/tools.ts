@@ -4,9 +4,13 @@ import { homedir } from 'os'
 
 const CAST_CONFIG_PATH = process.env.CLAIR_CASTRC ?? join(homedir(), '.clair-castrc')
 
+let _cachedConfig: { apiUrl: string; token: string } | null = null
+
 function loadCastConfig(): { apiUrl: string; token: string } {
+  if (_cachedConfig) return _cachedConfig
   const raw = readFileSync(CAST_CONFIG_PATH, 'utf-8')
-  return JSON.parse(raw)
+  _cachedConfig = JSON.parse(raw)
+  return _cachedConfig!
 }
 
 async function castApi(
