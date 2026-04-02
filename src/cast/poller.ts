@@ -258,8 +258,8 @@ export function createCastPoller(opts: {
         if (newReplies.length > 0 && handler) {
           handler(newReplies)
         }
-      } catch {
-        // Thread may have been deleted
+      } catch (err) {
+        if (process.env.CLAIR_DEBUG) console.error(`[poller] thread ${parentId} error:`, err)
       }
     }
   }
