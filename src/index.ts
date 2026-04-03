@@ -2,7 +2,7 @@
 
 import { parseArgs } from 'util'
 import { resolve, join } from 'path'
-import { writeFileSync, readFileSync } from 'fs'
+import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs'
 import { homedir } from 'os'
 import { loadConfig } from './config/settings'
 import { getProactiveSystemPrompt } from './config/prompts'
@@ -141,8 +141,10 @@ if (!flags['no-cast']) {
       },
     },
   }
-  mcpConfigPath = '/tmp/clair-mcp.json'
-  writeFileSync(mcpConfigPath, JSON.stringify(castMcpConfig))
+  const clairDir = join(homedir(), '.clair')
+  if (!existsSync(clairDir)) mkdirSync(clairDir, { recursive: true })
+  mcpConfigPath = join(clairDir, 'mcp-config.json')
+  writeFileSync(mcpConfigPath, JSON.stringify(castMcpConfig), { mode: 0o600 })
 }
 
 // --- Session resume ---
